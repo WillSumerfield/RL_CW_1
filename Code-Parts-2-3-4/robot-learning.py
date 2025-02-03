@@ -46,7 +46,9 @@ while running:
     if episode_done:
         environment = Environment()
         robot.set_goal_state(environment.goal_state)
-        robot.reset()
+        end = robot.reset()
+        if end:
+            break
     # If the episode has not finished, execute the selected action
     else:
         next_state = environment.step(action)
