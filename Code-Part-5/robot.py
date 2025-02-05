@@ -52,34 +52,32 @@ class Robot:
         criterion = nn.MSELoss()
         
         # Get 10 demos and train on them
-        samples = []
+        buffer = ReplayBuffer()
         for demo in range(config.DEMO_COUNT):
             print(f"Received Demo: {demo}")
-            samples += demonstrator.generate_demonstration()
+            d = demonstrator.generate_demonstration()
+            for state, action in d:
+                buffer.add_data(state, action)
     
         # Train until the loss is below a threshold
-        batch_ind = 0
         for epoch in range(config.EPOCH_COUNT):
             # Get a random batch of data
-            batch = np.array([samples[i] for i in np.random.choice(len(samples), config.BATCH_SIZE)])
-            states = torch.tensor(batch[:,0], dtype=torch.float32)
-            actions = torch.tensor(batch[:,1], dtype=torch.float32)
+            minibatches = buffer.sample_epoch_minibatches(config.BATCH_SIZE)
 
-            # Zero the gradients
-            optimizer.zero_grad()
-            # Forward pass
-            predicted_actions = self.model(states)
-            predicted_actions = torch.clip(predicted_actions, min=-constants.MAX_ACTION_MAGNITUDE, max=constants.MAX_ACTION_MAGNITUDE)
-            # Compute the loss
-            loss = criterion(predicted_actions, actions)
-            # Backward pass
-            loss.backward()
-            # Optimize
-            optimizer.step()
+            for states, actions in minibatches:
+                # Zero the gradients
+                optimizer.zero_grad()
+                # Forward pass
+                predicted_actions = self.model(states)
+                predicted_actions = torch.clip(predicted_actions, min=-constants.MAX_ACTION_MAGNITUDE, max=constants.MAX_ACTION_MAGNITUDE)
+                # Compute the loss
+                loss = criterion(predicted_actions, actions)
+                # Backward pass
+                loss.backward()
+                # Optimize
+                optimizer.step()
 
-            batch_ind += 10
-            if batch_ind % 1 == 0:
-                print(f"Batches: {batch_ind}, Loss: {loss.item()}")
+            print(f"Epoch: {epoch}, Loss: {loss.item()}")
 
         self.model.eval()
 
@@ -87,7 +85,7 @@ class Robot:
     def select_action(self, state):
         action = self.model(torch.tensor(state, dtype=torch.float32)).detach().numpy()
         self.step += 1
-        episode_done = self.step == constants.CEM_PATH_LENGTH*4
+        episode_done = self.step == int(constants.CEM_PATH_LENGTH*1.5)
         return action, episode_done
 
 
