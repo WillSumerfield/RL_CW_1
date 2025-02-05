@@ -39,18 +39,20 @@ class Robot:
         self.dynamics_episode_count = 0
         # The data collected for the dynamics model
         self.dynamics_model_data = deque(maxlen=config.DYNAMICS_DATA_COLLECTION_EPISODE_LENGTH*config.DYNAMICS_DATA_COLLECTION_EPISODES)
-        # The loss of the dynamics model
-        self.dynamics_model_loss = []
+        # The losses to graph
+        self.closed_loss = []
+        self.open_loss = []
         # The dynamics model
         self.dynamics_model = DynamicsModel()
         # Track if the dynamics model is initialized
         self.dynamics_model_init = False
         # The CEM distribution
         self.action_distribution = None
-        # The CEM path
+        # The current closed-loop path
         self.path = None
         # The number of episodes that the model has been trained on
         self.trained_episodes = 0
+        self.open_mode = True
 
     # Reset the robot at the start of an episode
     def reset(self):
@@ -60,18 +62,31 @@ class Robot:
         self.path = None
 
         # Plot the loss over time if we reached the end of training
-        if self.dynamics_episode_count >= config.DYNAMICS_DATA_COLLECTION_EPISODES:
-            self.trained_episodes += 1
+        if self.dynamics_episode_count == config.DYNAMICS_DATA_COLLECTION_EPISODES:
+            print(f"Episode: {self.trained_episodes}")
             if self.trained_episodes == config.TOTAL_EPISODES:
-                print(len(self.dynamics_model_loss))
-                plt.plot(self.dynamics_model_loss)
-                plt.title("Dynamics Model Loss")
-                plt.xlabel("Batch Number")
-                plt.ylabel("Loss")
-                plt.show()
-                plt.savefig("CME_loss.png")
-                return True
-
+                if self.open_mode:
+                    self.action_distribution
+                    self.trained_episodes = 0
+                    self.open_mode = False
+                    self.trained_episodes = -1
+                    self.dynamics_episode_count = 0
+                    self.dynamics_model_init = False
+                    self.dynamics_model = DynamicsModel()
+                    self.dynamics_model_data = deque(maxlen=config.DYNAMICS_DATA_COLLECTION_EPISODE_LENGTH*config.DYNAMICS_DATA_COLLECTION_EPISODES)
+                else:
+                    plt.plot(self.closed_loss, label="Closed-Loop Loss")
+                    plt.plot(self.open_loss, label="Open-Loop Loss")
+                    plt.title("Dynamics Model Loss")
+                    plt.xlabel("Episode Number")
+                    plt.ylabel("Loss")
+                    plt.xticks(range(0, config.TOTAL_EPISODES+1))
+                    #plt.yscale('log')
+                    plt.legend()
+                    plt.show()
+                    plt.savefig("Mix_Loss.png")
+                    return True
+            self.trained_episodes += 1
         return False
 
     # Give the robot access to the goal state
@@ -95,25 +110,28 @@ class Robot:
                 self.train_dynamic_model()
                 self.dynamics_model_init = True
 
-            # After training the dynamics model, use the cross-entropy method to plan
-            if self.path is None:
+            # Use CEM to make a plan each episode
+            if self.path is None or not self.open_mode:
                 self.create_plan(state)
 
             # Train the dynamics model for a set number of minibatches
             self.train_dynamic_model(batches=config.DYNAMICS_BATCH_SIZE)
 
             pred_state = self.path[self.episode_steps, 0]
-            action = self.path[self.episode_steps, 1]
+            action = self.path[self.episode_steps if self.open_mode else 0, 1]
+
+            if self.episode_steps == config.TOTAL_EPISODES:
+                loss = np.linalg.norm(constants.GOAL_STATE - self.forward_kinematics(state)[2])
+                if self.open_mode:
+                    self.open_loss += [loss]
+                else:
+                    self.closed_loss += [loss]
 
             # Visualise the action
             pred_pos = self.forward_kinematics(pred_state)
             state_pos = self.forward_kinematics(state)
             v1 = VisualisationLine(state_pos[2][0], state_pos[2][1], pred_pos[2][0], pred_pos[2][1], (0, 255, 0), 0.005)
             self.model_visualisation_lines = [v1]
-
-            if self.episode_steps > 0:
-                prev_pred = self.path[self.episode_steps-1, 0]
-                print(self.episode_steps, prev_pred, state, np.linalg.norm(prev_pred - state))
 
         self.episode_steps += 1
         episode_done = self.episode_steps >= config.CEM_PATH_LENGTH
@@ -126,6 +144,7 @@ class Robot:
         criterion = nn.MSELoss()
 
         # Train until the loss is below a threshold
+        avg_loss = 0
         batch_ind = 0
         while True:
             # Get a random batch of data
@@ -145,11 +164,11 @@ class Robot:
             # Optimize
             optimizer.step()
 
-            self.dynamics_model_loss.append(loss.item())
+            avg_loss += loss.item()
 
             batch_ind += 1
-            if batch_ind % 50 == 0:
-                print(f"Batches: {batch_ind}, Loss: {loss.item()}")
+            #if batch_ind % 50 == 0:
+                #print(f"Batches: {batch_ind}, Loss: {loss.item()}")
 
             if not batches is None:
                 if batch_ind == batches:
@@ -158,6 +177,8 @@ class Robot:
                 break
 
         self.dynamics_model.eval()
+        
+        #self.dynamics_model_loss += [avg_loss/batch_ind]
 
     # Function to add a transition to the buffer
     def add_transition(self, state, action, next_state):
@@ -167,6 +188,7 @@ class Robot:
     def create_plan(self, state):
 
         # Iteratively improve the plans
+        action_distribution = None
         for itr in range(config.CEM_ITERATIONS):
 
             # Get a series of plans
@@ -178,10 +200,10 @@ class Robot:
                 for step in range(config.CEM_PATH_LENGTH):
 
                     # If this is our first pass, use a normal distribution
-                    if self.action_distribution is None:
+                    if action_distribution is None:
                         action = np.random.uniform(low=-constants.MAX_ACTION_MAGNITUDE, high=constants.MAX_ACTION_MAGNITUDE, size=2)
                     else:
-                        action = np.clip(np.random.normal(loc=self.action_distribution[step, 0], scale=self.action_distribution[step, 1]),
+                        action = np.clip(np.random.normal(loc=action_distribution[step, 0], scale=action_distribution[step, 1]),
                                          -constants.MAX_ACTION_MAGNITUDE, constants.MAX_ACTION_MAGNITUDE)
 
                     # Predict the next state
@@ -200,18 +222,18 @@ class Robot:
             top_k_std = np.std(top_paths[:, :, 1], axis=0)
             top_k_dist = np.stack([top_k_mean, top_k_std], axis=1)
             if self.action_distribution is None:
-                self.action_distribution = top_k_dist
+                action_distribution = top_k_dist
             else:
-                self.action_distribution += config.CEM_DISTRIBUTION_UPDATE*(top_k_dist - self.action_distribution)
+                action_distribution += config.CEM_DISTRIBUTION_UPDATE*(top_k_dist - self.action_distribution)
 
-        # Use the best path
         self.path = top_paths[0]
 
-        # Visualise the path
-        for i in range(config.CEM_PATH_LENGTH):
+        # Visualise the paths
+        self.planning_visualisation_lines = []
+        for i in range(config.CEM_PATH_LENGTH - self.episode_steps):
             pred_state = self.path[i, 0]
             pred_pos = self.forward_kinematics(pred_state)
-            colour = (255*((1-float(i)/config.CEM_PATH_LENGTH)), 255*(float(i)/config.CEM_PATH_LENGTH), 0)
+            colour = (0, 0, 255*(float(i)/config.CEM_PATH_LENGTH))
             v1 = VisualisationLine(pred_pos[0][0], pred_pos[0][1], pred_pos[1][0], pred_pos[1][1], colour, 0.005)
             v2 = VisualisationLine(pred_pos[1][0], pred_pos[1][1], pred_pos[2][0], pred_pos[2][1], colour, 0.005)
             self.planning_visualisation_lines += [v1, v2]
