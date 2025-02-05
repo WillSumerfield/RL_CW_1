@@ -54,6 +54,8 @@ class Robot:
         self.trained_episodes = 0
         self.open_mode = True
 
+        # Make plan, then reset. All in one graph
+
     # Reset the robot at the start of an episode
     def reset(self):
         self.episode_steps = 0
@@ -66,6 +68,7 @@ class Robot:
             print(f"Episode: {self.trained_episodes}")
             if self.trained_episodes == config.TOTAL_EPISODES:
                 if self.open_mode:
+                    config.FRAME_RATE = 100
                     self.action_distribution
                     self.trained_episodes = 0
                     self.open_mode = False
@@ -117,7 +120,7 @@ class Robot:
             # Train the dynamics model for a set number of minibatches
             self.train_dynamic_model(batches=config.DYNAMICS_BATCH_SIZE)
 
-            pred_state = self.path[self.episode_steps, 0]
+            pred_state = self.path[self.episode_steps if self.open_mode else 0, 0]
             action = self.path[self.episode_steps if self.open_mode else 0, 1]
 
             if self.episode_steps == config.TOTAL_EPISODES:
@@ -192,12 +195,12 @@ class Robot:
         for itr in range(config.CEM_ITERATIONS):
 
             # Get a series of plans
-            paths =  np.zeros((config.CEM_PATHS, config.CEM_PATH_LENGTH, 2, 2))
+            paths =  np.zeros((config.CEM_PATHS, config.CEM_PATH_LENGTH-self.episode_steps, 2, 2))
             for p in range(config.CEM_PATHS):
                 cur_state = state
 
                 # Generate a path
-                for step in range(config.CEM_PATH_LENGTH):
+                for step in range(config.CEM_PATH_LENGTH-self.episode_steps):
 
                     # If this is our first pass, use a normal distribution
                     if action_distribution is None:
@@ -233,7 +236,7 @@ class Robot:
         for i in range(config.CEM_PATH_LENGTH - self.episode_steps):
             pred_state = self.path[i, 0]
             pred_pos = self.forward_kinematics(pred_state)
-            colour = (0, 0, 255*(float(i)/config.CEM_PATH_LENGTH))
+            colour = (255*(1 - float(i)/config.CEM_PATH_LENGTH), 255*(float(i)/config.CEM_PATH_LENGTH), 0)
             v1 = VisualisationLine(pred_pos[0][0], pred_pos[0][1], pred_pos[1][0], pred_pos[1][1], colour, 0.005)
             v2 = VisualisationLine(pred_pos[1][0], pred_pos[1][1], pred_pos[2][0], pred_pos[2][1], colour, 0.005)
             self.planning_visualisation_lines += [v1, v2]

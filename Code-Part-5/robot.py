@@ -48,7 +48,7 @@ class Robot:
 
         # Train the model until convergence
         self.model.train()
-        optimizer = torch.optim.Adam(self.model.parameters(), 0.0001)
+        optimizer = torch.optim.Adam(self.model.parameters(), 0.001)
         criterion = nn.MSELoss()
         
         # Get 10 demos and train on them
@@ -59,7 +59,7 @@ class Robot:
     
         # Train until the loss is below a threshold
         batch_ind = 0
-        while True:
+        for epoch in range(config.EPOCH_COUNT):
             # Get a random batch of data
             batch = np.array([samples[i] for i in np.random.choice(len(samples), config.BATCH_SIZE)])
             states = torch.tensor(batch[:,0], dtype=torch.float32)
@@ -80,9 +80,6 @@ class Robot:
             batch_ind += 10
             if batch_ind % 1 == 0:
                 print(f"Batches: {batch_ind}, Loss: {loss.item()}")
-
-            if loss.item() < config.LOSS_THRESHOLD:
-                break
 
         self.model.eval()
 
@@ -109,10 +106,10 @@ class VisualisationLine:
 class ActionModel(nn.Module):
     def __init__(self):
         super(ActionModel, self).__init__()
-        self.fc1 = nn.Linear(2, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, 256)
-        self.fc4 = nn.Linear(256, 2)
+        self.fc1 = nn.Linear(2, 20)
+        self.fc2 = nn.Linear(20, 20)
+        self.fc3 = nn.Linear(20, 20)
+        self.fc4 = nn.Linear(20, 2)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
@@ -120,3 +117,36 @@ class ActionModel(nn.Module):
         x = torch.relu(self.fc3(x))
         x = self.fc4(x)
         return x
+
+
+# ReplayBuffer class stores transitions
+class ReplayBuffer:
+    def __init__(self):
+        self.states = []
+        self.actions = []
+        self.size = 0
+
+    def add_data(self, state, action):
+        self.states.append(state)
+        self.actions.append(action)
+        self.size += 1
+
+    # Create minibatches for a single epoch of training (one epoch means all the training data is seen once)
+    def sample_epoch_minibatches(self, minibatch_size):
+        # Convert lists to NumPy arrays for indexing
+        states_array = np.array(self.states)
+        actions_array = np.array(self.actions)
+        # Shuffle indices
+        indices = np.random.permutation(self.size)
+        minibatches = []
+        # Create minibatches
+        for i in range(0, self.size, minibatch_size):
+            # Get the indices for this minibatch
+            minibatch_indices = indices[i: i + minibatch_size]
+            minibatch_states = states_array[minibatch_indices]
+            minibatch_actions = actions_array[minibatch_indices]
+            # Convert to torch tensors
+            inputs = torch.tensor(minibatch_states, dtype=torch.float32)
+            targets = torch.tensor(minibatch_actions, dtype=torch.float32)
+            minibatches.append((inputs, targets))
+        return minibatches

@@ -12,6 +12,6 @@ WINDOW_SIZE = 600
 FRAME_RATE = 60
 
 # You may want to add your own configuration variables here, depending on the algorithm you implement.
-DEMO_COUNT = 50
-LOSS_THRESHOLD = 0.001
+DEMO_COUNT = 1
+EPOCH_COUNT = 500
 BATCH_SIZE = 32
