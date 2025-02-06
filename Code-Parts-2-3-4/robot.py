@@ -40,12 +40,10 @@ class Robot:
         # The data collected for the dynamics model
         self.dynamics_model_data = deque(maxlen=config.DYNAMICS_DATA_COLLECTION_EPISODE_LENGTH*config.DYNAMICS_DATA_COLLECTION_EPISODES)
         # The losses to graph
-        self.closed_loss = []
-        self.open_loss = []
+        self.closed_dist = []
+        self.open_dist = []
         # The dynamics model
         self.dynamics_model = DynamicsModel()
-        # Track if the dynamics model is initialized
-        self.dynamics_model_init = False
         # The CEM distribution
         self.action_distribution = None
         # The current closed-loop path
@@ -53,8 +51,6 @@ class Robot:
         # The number of episodes that the model has been trained on
         self.trained_episodes = 0
         self.open_mode = True
-
-        # Make plan, then reset. All in one graph
 
     # Reset the robot at the start of an episode
     def reset(self):
@@ -64,32 +60,30 @@ class Robot:
         self.path = None
 
         # Plot the loss over time if we reached the end of training
-        if self.dynamics_episode_count == config.DYNAMICS_DATA_COLLECTION_EPISODES:
-            print(f"Episode: {self.trained_episodes}")
-            if self.trained_episodes == config.TOTAL_EPISODES:
-                if self.open_mode:
-                    config.FRAME_RATE = 100
-                    self.action_distribution
-                    self.trained_episodes = 0
-                    self.open_mode = False
-                    self.trained_episodes = -1
-                    self.dynamics_episode_count = 0
-                    self.dynamics_model_init = False
-                    self.dynamics_model = DynamicsModel()
-                    self.dynamics_model_data = deque(maxlen=config.DYNAMICS_DATA_COLLECTION_EPISODE_LENGTH*config.DYNAMICS_DATA_COLLECTION_EPISODES)
-                else:
-                    plt.plot(self.closed_loss, label="Closed-Loop Loss")
-                    plt.plot(self.open_loss, label="Open-Loop Loss")
-                    plt.title("Dynamics Model Loss")
-                    plt.xlabel("Episode Number")
-                    plt.ylabel("Loss")
-                    plt.xticks(range(0, config.TOTAL_EPISODES+1))
-                    #plt.yscale('log')
-                    plt.legend()
-                    plt.show()
-                    plt.savefig("Mix_Loss.png")
-                    return True
+        if self.open_mode:
+            self.open_mode = False
+        else:
+            self.open_mode = True
             self.trained_episodes += 1
+            print(f"Episode Complete: {self.trained_episodes}")
+
+            # Train after trying both appraoches with the current dynamics model
+            self.train_dynamic_model(config.DYNAMICS_BATCH_COUNT)
+            
+            # Graph the model after the final episode
+            if self.trained_episodes == config.TOTAL_EPISODES:
+                plt.plot(list(range(1, config.TOTAL_EPISODES+1)), self.closed_dist, label="Closed-Loop Loss")
+                plt.plot(list(range(1, config.TOTAL_EPISODES+1)),   self.open_dist, label="Open-Loop Loss")
+                plt.title("Closed Vs Open Loop Dist. at end of Ep.")
+                plt.xlabel("Episode Number")
+                plt.ylabel("Distance to Goal")
+                plt.xticks(range(1, config.TOTAL_EPISODES+1))
+                #plt.yscale('log')
+                plt.legend()
+                plt.show()
+                plt.savefig("Loop_Dist.png")
+                return True
+
         return False
 
     # Give the robot access to the goal state
@@ -100,46 +94,40 @@ class Robot:
     def select_action(self, state):
 
         # At first, explore to train the dynamics model.
+        """
         if self.dynamics_episode_count < config.DYNAMICS_DATA_COLLECTION_EPISODES:
             action = np.random.uniform(low=-constants.MAX_ACTION_MAGNITUDE, high=constants.MAX_ACTION_MAGNITUDE, size=2) # Randomly explore
             if self.episode_steps+1 >= config.DYNAMICS_DATA_COLLECTION_EPISODE_LENGTH:
                 self.dynamics_episode_count += 1
                 return action, True
-        
-        # Train the dynamics model if enough data has been collected
-        else:
-            config.FRAME_RATE = 10
-            if not self.dynamics_model_init:
-                self.train_dynamic_model()
-                self.dynamics_model_init = True
+        """
+        # Find the final distance to the goal
+        if self.episode_steps == config.CEM_PATH_LENGTH:
+            dist = np.linalg.norm(constants.GOAL_STATE - self.forward_kinematics(state)[2])
+            if self.open_mode:
+                self.open_dist += [dist]
+            else:
+                self.closed_dist += [dist]
 
-            # Use CEM to make a plan each episode
-            if self.path is None or not self.open_mode:
-                self.create_plan(state)
+            return [0, 0], True 
 
-            # Train the dynamics model for a set number of minibatches
-            self.train_dynamic_model(batches=config.DYNAMICS_BATCH_SIZE)
+        # Use CEM to make a plan each episode
+        if self.path is None or not self.open_mode:
+            self.create_plan(state)
 
-            pred_state = self.path[self.episode_steps if self.open_mode else 0, 0]
-            action = self.path[self.episode_steps if self.open_mode else 0, 1]
+        # query the path this step
+        pred_state = self.path[self.episode_steps if self.open_mode else 0, 0]
+        action = self.path[self.episode_steps if self.open_mode else 0, 1]
 
-            if self.episode_steps == config.TOTAL_EPISODES:
-                loss = np.linalg.norm(constants.GOAL_STATE - self.forward_kinematics(state)[2])
-                if self.open_mode:
-                    self.open_loss += [loss]
-                else:
-                    self.closed_loss += [loss]
-
-            # Visualise the action
-            pred_pos = self.forward_kinematics(pred_state)
-            state_pos = self.forward_kinematics(state)
-            v1 = VisualisationLine(state_pos[2][0], state_pos[2][1], pred_pos[2][0], pred_pos[2][1], (0, 255, 0), 0.005)
-            self.model_visualisation_lines = [v1]
+        # Visualise the action
+        pred_pos = self.forward_kinematics(pred_state)
+        state_pos = self.forward_kinematics(state)
+        v1 = VisualisationLine(state_pos[2][0], state_pos[2][1], pred_pos[2][0], pred_pos[2][1], (0, 255, 0), 0.005)
+        self.model_visualisation_lines = [v1]
 
         self.episode_steps += 1
-        episode_done = self.episode_steps >= config.CEM_PATH_LENGTH
 
-        return action, episode_done
+        return action, False
 
     def train_dynamic_model(self, batches=None):
         self.dynamics_model.train()

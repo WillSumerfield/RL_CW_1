@@ -9,14 +9,14 @@ WINDOW_SIZE = 600
 # The frame rate for pygame, which determines how quickly the program runs.
 # Specifically, this is the number of time steps per second that the robot will execute an action in the environment.
 # You may wish to slow this down to observe the robot's movement, or speed it up to run large-scale experiments.
-FRAME_RATE = 100
+FRAME_RATE = 10
 
 # You may want to add your own configuration variables here, depending on the algorithm you implement.
 DYNAMICS_DATA_COLLECTION_EPISODES = 100
 DYNAMICS_DATA_COLLECTION_EPISODE_LENGTH = 5
 DYNAMICS_BATCH_SIZE = 128
 DYNAMICS_TRAINING_THRESHOLD = 0.0001
-DYNAMICS_BATCH_COUNT = 50
+DYNAMICS_BATCH_COUNT = 1000
 
 CEM_ITERATIONS = 10
 CEM_PATHS = 50

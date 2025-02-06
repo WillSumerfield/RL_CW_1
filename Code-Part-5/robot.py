@@ -33,37 +33,55 @@ class Robot:
         self.model = ActionModel()
         self.path = []
 
+        self.loss = np.zeros((config.MAX_DEMOS, config.ATTEMPTS))
+
+        self.buffer = ReplayBuffer()
+        self.demos = 0
+        self.attempt = 0
+
     # Reset the robot at the start of an episode
     def reset(self):
         self.planning_visualisation_lines = []
         self.policy_visualisation_lines = []
         self.step = 0
+        self.model = ActionModel()
+        self.demos += 1
+
+        if self.demos == config.MAX_DEMOS:
+            self.demos = 0
+            self.attempt += 1
+            self.buffer = ReplayBuffer()
+            if self.attempt == config.ATTEMPTS:
+                plt.plot(list(range(1, config.MAX_DEMOS+1)), self.loss.mean(axis=1))
+                plt.title("Goal Distance vs Num. Of Demos")
+                plt.xlabel("Number of Demos")
+                plt.ylabel("Goal Distance")
+                plt.xticks(range(1, config.MAX_DEMOS+1))
+                plt.yscale('log')
+                plt.show()
+                plt.savefig("Imitation.png")
+                return False
+            
+        return True
 
     # Get the demonstrations
     def get_demos(self, demonstrator):
     
-        if self.trained:
-            return
-        self.trained = True
-
         # Train the model until convergence
         self.model.train()
-        optimizer = torch.optim.Adam(self.model.parameters(), 0.001)
+        optimizer = torch.optim.Adam(self.model.parameters())
         criterion = nn.MSELoss()
         
-        # Get 10 demos and train on them
-        buffer = ReplayBuffer()
-        for demo in range(config.DEMO_COUNT):
-            print(f"Received Demo: {demo}")
-            d = demonstrator.generate_demonstration()
-            for state, action in d:
-                buffer.add_data(state, action)
+        # Add a demo
+        print(f"Attempt: {self.attempt+1}, Demos: {self.demos+1}")
+        for state, action in demonstrator.generate_demonstration():
+            self.buffer.add_data(state, action)
     
-        # Train until the loss is below a threshold
+        # Train a number of epochs
         for epoch in range(config.EPOCH_COUNT):
-            # Get a random batch of data
-            minibatches = buffer.sample_epoch_minibatches(config.BATCH_SIZE)
 
+            # Get a random batch of data
+            minibatches = self.buffer.sample_epoch_minibatches(config.BATCH_SIZE)
             for states, actions in minibatches:
                 # Zero the gradients
                 optimizer.zero_grad()
@@ -77,7 +95,7 @@ class Robot:
                 # Optimize
                 optimizer.step()
 
-            print(f"Epoch: {epoch}, Loss: {loss.item()}")
+            #print(f"Epoch: {epoch}, Loss: {loss.item()}")
 
         self.model.eval()
 
@@ -85,7 +103,11 @@ class Robot:
     def select_action(self, state):
         action = self.model(torch.tensor(state, dtype=torch.float32)).detach().numpy()
         self.step += 1
-        episode_done = self.step == int(constants.CEM_PATH_LENGTH*1.5)
+        episode_done = self.step >= int(constants.CEM_PATH_LENGTH)
+
+        if episode_done:
+            self.loss[self.demos, self.attempt] = np.linalg.norm(constants.GOAL_STATE - self.forward_kinematics(state)[2])
+
         return action, episode_done
 
 

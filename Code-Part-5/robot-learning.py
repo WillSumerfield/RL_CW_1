@@ -45,7 +45,9 @@ while running:
     if episode_done:
         environment = Environment()
         demonstrator = Demonstrator(environment)
-        robot.reset()
+        running = robot.reset()
+        if not running:
+            break
         robot.get_demos(demonstrator)
     # If the episode has not finished, execute the selected action
     else:
